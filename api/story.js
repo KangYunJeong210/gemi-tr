@@ -3,10 +3,6 @@ import { GoogleGenAI } from "@google/genai";
 
 
 
-function hasBanned(t) {
-  const s = (t || "").toLowerCase();
-  return BANNED.find(b => s.includes(b.toLowerCase()));
-}
 
 function fallback(reason) {
   return {
@@ -101,3 +97,4 @@ ${userText || "(없음)"}
     return res.json(fallback(err.message));
   }
 }
+
