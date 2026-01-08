@@ -88,7 +88,7 @@ export default async function handler(req, res) {
       "선택지는 정확히 3개. 서로 다른 접근(관찰/대화/행동 등)으로 구분한다.",
       "직전 턴 선택지와 동일/유사한 선택지를 반복하지 마라.",
       "플레이어의 직전 입력에 직접 반응하는 선택지를 최소 1개 포함하라.",
-      "과도한 폭력/선정/혐오/불법행동의 구체 묘사는 피한다."
+     
     ].join(" ");
 
     const userPrompt = [
@@ -138,3 +138,4 @@ export default async function handler(req, res) {
     });
   }
 }
+
