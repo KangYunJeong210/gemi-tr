@@ -1,0 +1,84 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>TRPG Chat</title>
+  <link rel="stylesheet" href="./styles.css" />
+</head>
+<body>
+  <div id="app" class="app"></div>
+
+  <template id="tpl-list">
+    <div class="screen">
+      <header class="topbar">
+        <div class="topbar__title">TRPG 게임 목록</div>
+      </header>
+
+      <main class="content">
+        <section class="card">
+          <div class="card__row">
+            <div>
+              <div class="card__title">새 게임</div>
+              <div class="card__sub">새로운 세계로 들어가기</div>
+            </div>
+            <button class="btn btn--primary" data-action="new-game">만들기</button>
+          </div>
+
+          <div class="divider"></div>
+
+          <label class="field">
+            <div class="field__label">게임 제목</div>
+            <input class="input" type="text" data-bind="newTitle" placeholder="예: 호그와트 1학년" maxlength="40" />
+          </label>
+
+          <label class="field">
+            <div class="field__label">장르/톤(선택)</div>
+            <input class="input" type="text" data-bind="newGenre" placeholder="예: 미연시풍 학원 TRPG, 미스터리" maxlength="60" />
+          </label>
+
+          <label class="field">
+            <div class="field__label">초기 설정(선택)</div>
+            <textarea class="textarea" data-bind="newSeed" placeholder="예: 주인공 설정, 금지 요소, 진행 방식 등" rows="4"></textarea>
+          </label>
+        </section>
+
+        <section class="card">
+          <div class="card__title">진행 중인 게임</div>
+          <div class="list" data-slot="game-list"></div>
+        </section>
+
+        <section class="footnote">
+          <p>※ 저장은 기기(브라우저) 로컬에 저장돼요. 다른 기기로는 자동 이동되지 않아요.</p>
+        </section>
+      </main>
+    </div>
+  </template>
+
+  <template id="tpl-chat">
+    <div class="screen">
+      <header class="topbar">
+        <button class="iconbtn" data-action="to-list" aria-label="목록으로">←</button>
+        <div class="topbar__title" data-slot="game-title">게임</div>
+        <div class="topbar__right">
+          <button class="iconbtn" data-action="save" aria-label="저장">💾</button>
+          <button class="iconbtn" data-action="reset-chat" aria-label="이 게임 리셋">⟲</button>
+        </div>
+      </header>
+
+      <main class="chat">
+        <div class="chat__feed" data-slot="feed"></div>
+
+        <div class="choices" data-slot="choices"></div>
+
+        <form class="composer" data-action="composer">
+          <input class="composer__input" data-bind="userText" type="text" placeholder="직접 입력(선택)..." />
+          <button class="composer__send" type="submit">전송</button>
+        </form>
+      </main>
+    </div>
+  </template>
+
+  <script type="module" src="./app.js"></script>
+</body>
+</html>

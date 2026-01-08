@@ -1,0 +1,14 @@
+{
+  "name": "trpg-chat",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Gemini GM 기반 모바일 채팅형 TRPG",
+  "scripts": {
+    "dev": "vercel dev",
+    "start": "vercel dev"
+  },
+  "dependencies": {
+    "@google/genai": "^0.7.0"
+  }
+}
