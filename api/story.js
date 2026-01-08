@@ -1,13 +1,9 @@
-// /api/story.js  (Vercel Serverless Function - Node.js)
-// - Request: 프론트(app.js)에서 보내는 payload 그대로
-// - Response: { story: string, choices: [{id,text}*3], statePatch: object }
-//
-// ENV:
-// - GEMINI_API_KEY=xxxx
-// - (optional) GEMINI_MODEL=gemini-2.0-flash  (default)
+// /api/story.js (Vercel Serverless Function, ESM)
+// ENV: GEMINI_API_KEY, (optional) GEMINI_MODEL=gemini-2.0-flash
+
+import { GoogleGenAI } from "@google/genai";
 
 function setCors(req, res) {
-  // 필요하면 "*" 대신 본인 도메인으로 제한해도 됨
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
   res.setHeader("Access-Control-Allow-Headers", "Content-Type");
@@ -17,18 +13,12 @@ function setCors(req, res) {
 function safeJsonParse(text) {
   if (!text) return null;
   let t = String(text).trim();
-
-  // code fence 제거
   t = t.replace(/^```(?:json)?\s*/i, "").replace(/```$/i, "").trim();
-
-  // 텍스트 중 JSON 객체만 뽑기(혹시 앞뒤 잡담 섞였을 때)
   const first = t.indexOf("{");
   const last = t.lastIndexOf("}");
   if (first === -1 || last === -1 || last <= first) return null;
-  t = t.slice(first, last + 1);
-
   try {
-    return JSON.parse(t);
+    return JSON.parse(t.slice(first, last + 1));
   } catch {
     return null;
   }
@@ -42,8 +32,6 @@ function normalizeOutput(out) {
     id: String(c?.id ?? `c${i + 1}`),
     text: String(c?.text ?? "").trim() || `선택지 ${i + 1}`,
   }));
-
-  // 3개 미만이면 채워 넣기
   while (choices.length < 3) {
     const i = choices.length;
     choices.push({ id: `c${i + 1}`, text: `선택지 ${i + 1}` });
@@ -54,24 +42,21 @@ function normalizeOutput(out) {
       ? out.statePatch
       : {};
 
-  return { story: story || "…(GM이 잠시 말이 없다. 다시 한 번 시도해줘.)", choices, statePatch };
+  return {
+    story: story || "…(GM이 잠시 말이 없다. 다시 시도해줘.)",
+    choices,
+    statePatch,
+  };
 }
 
-module.exports = async (req, res) => {
+export default async function handler(req, res) {
   setCors(req, res);
 
-  if (req.method === "OPTIONS") {
-    return res.status(204).end();
-  }
-
-  if (req.method !== "POST") {
-    return res.status(405).json({ error: "Method Not Allowed" });
-  }
+  if (req.method === "OPTIONS") return res.status(204).end();
+  if (req.method !== "POST") return res.status(405).json({ error: "Method Not Allowed" });
 
   const apiKey = process.env.GEMINI_API_KEY;
-  if (!apiKey) {
-    return res.status(500).json({ error: "Missing GEMINI_API_KEY in env" });
-  }
+  if (!apiKey) return res.status(500).json({ error: "Missing GEMINI_API_KEY" });
 
   try {
     const body = req.body ?? {};
@@ -80,12 +65,12 @@ module.exports = async (req, res) => {
     const history = Array.isArray(body.history) ? body.history : [];
     const userText = body.userText ?? null;
     const choiceId = body.choiceId ?? null;
+    const lastChoices = Array.isArray(body.lastChoices) ? body.lastChoices : [];
 
     const title = String(game.title ?? "게임").trim();
     const genre = String(game.genre ?? "").trim();
     const seed = String(game.seed ?? "").trim();
 
-    // 최근 대화 텍스트(모델에 참고용)
     const historyText = history
       .slice(-20)
       .map((m) => {
@@ -98,10 +83,12 @@ module.exports = async (req, res) => {
 
     const systemInstruction = [
       "너는 모바일 TRPG의 GM이다.",
-      "항상 한국어로, 분위기 있는 스토리 1~3문단을 출력한다.",
-      "반드시 다음 JSON 스키마로만 응답한다(설명/코드펜스/추가 텍스트 금지).",
-      "스토리는 이전 대화와 상태(state)를 자연스럽게 이어간다.",
-      "선택지는 3개. (서로 다른 행동/대사/태도)로 만들고, 너무 길지 않게 쓴다."
+      "항상 한국어로, 스토리 1~3문단을 출력한다.",
+      "반드시 JSON만 응답한다(설명/코드펜스/추가 텍스트 금지).",
+      "선택지는 정확히 3개. 서로 다른 접근(관찰/대화/행동 등)으로 구분한다.",
+      "직전 턴 선택지와 동일/유사한 선택지를 반복하지 마라.",
+      "플레이어의 직전 입력에 직접 반응하는 선택지를 최소 1개 포함하라.",
+      "과도한 폭력/선정/혐오/불법행동의 구체 묘사는 피한다."
     ].join(" ");
 
     const userPrompt = [
@@ -112,6 +99,9 @@ module.exports = async (req, res) => {
       "현재 상태(state) JSON:",
       JSON.stringify(state ?? {}, null, 2),
       "",
+      "직전 GM 선택지:",
+      lastChoices.length ? JSON.stringify(lastChoices, null, 2) : "(없음)",
+      "",
       "최근 대화:",
       historyText || "(대화 없음)",
       "",
@@ -119,74 +109,32 @@ module.exports = async (req, res) => {
       userText ? String(userText) : "(없음: GM이 장면을 시작)",
       choiceId ? `선택지 ID: ${choiceId}` : "",
       "",
-      "이제 다음 장면을 제시하라.",
-    ]
-      .filter(Boolean)
-      .join("\n");
+      "이제 다음 장면을 제시하라."
+    ].filter(Boolean).join("\n");
 
-    // ---- Google GenAI SDK (new) ----
-    // Migrated SDK: @google/genai :contentReference[oaicite:1]{index=1}
-    const { GoogleGenAI } = await import("@google/genai");
     const ai = new GoogleGenAI({ apiKey });
-
     const model = process.env.GEMINI_MODEL || "gemini-2.0-flash";
 
-    // JSON 모드 + responseSchema로 출력 강제 :contentReference[oaicite:2]{index=2}
     const response = await ai.models.generateContent({
       model,
-      contents: userPrompt,
+      contents: [{ role: "user", parts: [{ text: userPrompt }] }],
       config: {
         systemInstruction,
         temperature: 0.9,
-        candidateCount: 1,
-        responseMimeType: "application/json",
-        responseSchema: {
-          type: "object",
-          properties: {
-            story: { type: "string" },
-            choices: {
-              type: "array",
-              minItems: 3,
-              maxItems: 3,
-              items: {
-                type: "object",
-                properties: {
-                  id: { type: "string" },
-                  text: { type: "string" },
-                },
-                required: ["id", "text"],
-              },
-            },
-            statePatch: {
-              type: "object",
-              additionalProperties: true,
-            },
-          },
-          required: ["story", "choices", "statePatch"],
-        },
-      },
+        responseMimeType: "application/json"
+      }
     });
 
-    // SDK는 response.text에 후보 텍스트를 합쳐 제공 :contentReference[oaicite:3]{index=3}
-    const rawText = response?.text ?? "";
-    const parsed = safeJsonParse(rawText);
-
+    const raw = response?.text ?? "";
+    const parsed = safeJsonParse(raw);
     const out = normalizeOutput(parsed);
 
     res.setHeader("Cache-Control", "no-store");
     return res.status(200).json(out);
   } catch (err) {
-    // 서버에서 에러가 나도 프론트가 멈추지 않게 최소 포맷으로 반환
-    return res.status(200).json({
-      story: "GM: (서버 오류가 났어. 잠시 후 다시 시도해줘.)",
-      choices: [
-        { id: "retry1", text: "다시 시도한다" },
-        { id: "retry2", text: "조금 쉬었다가 진행한다" },
-        { id: "retry3", text: "상황을 다시 정리해 말한다" },
-      ],
-      statePatch: {},
-      _error: String(err?.message || err),
+    return res.status(500).json({
+      error: "Server error",
+      message: String(err?.message || err),
     });
   }
-};
-
+}
