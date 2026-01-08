@@ -136,6 +136,40 @@ export default async function handler(req, res) {
       error: "Server error",
       message: String(err?.message || err),
     });
+
+    const response = await ai.models.generateContent({
+  model,
+  contents: [{ role: "user", parts: [{ text: userPrompt }] }],
+  config: {
+    systemInstruction,
+    temperature: 0.9,
+    responseMimeType: "application/json",
+    responseSchema: {
+      type: "object",
+      properties: {
+        story: { type: "string" },
+        choices: {
+          type: "array",
+          minItems: 3,
+          maxItems: 3,
+          items: {
+            type: "object",
+            properties: {
+              id: { type: "string" },
+              text: { type: "string" }
+            },
+            required: ["id", "text"]
+          }
+        },
+        statePatch: { type: "object" }
+      },
+      required: ["story", "choices", "statePatch"]
+    }
+  }
+});
+
+    
   }
 }
+
 
