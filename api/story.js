@@ -1,187 +1,99 @@
-// /api/story.js (Vercel Serverless Function, ESM)
-// Gemini GM -> 프론트가 기대하는 포맷으로 반환
-// Response: { story: string, choices: [{id,text}*3], statePatch: object }
-//
-// ENV:
-// - GEMINI_API_KEY=xxxx
-// - (optional) GEMINI_MODEL=gemini-2.0-flash
-
+// /api/story.js — Vercel Serverless (ESM, 안정판)
 import { GoogleGenAI } from "@google/genai";
 
-function setCors(req, res) {
+function cors(res) {
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
   res.setHeader("Access-Control-Allow-Headers", "Content-Type");
-  res.setHeader("Access-Control-Max-Age", "86400");
 }
 
-function safeJsonParse(text) {
-  if (!text) return null;
-
-  let t = String(text).trim();
-
-  // code fence 제거
-  t = t.replace(/^```(?:json)?\s*/i, "").replace(/```$/i, "").trim();
-
-  // 첫 { ~ 마지막 } 만 추출
-  const first = t.indexOf("{");
-  const last = t.lastIndexOf("}");
-  if (first === -1 || last === -1 || last <= first) return null;
-
-  try {
-    return JSON.parse(t.slice(first, last + 1));
-  } catch {
-    return null;
-  }
-}
-
-function normalizeOutput(out) {
-  const story = String(out?.story ?? "").trim();
-
-  const rawChoices = Array.isArray(out?.choices) ? out.choices : [];
-  const choices = rawChoices.slice(0, 3).map((c, i) => ({
-    id: String(c?.id ?? `c${i + 1}`),
-    text: String(c?.text ?? "").trim() || `선택지 ${i + 1}`,
-  }));
-
-  while (choices.length < 3) {
-    const i = choices.length;
-    choices.push({ id: `c${i + 1}`, text: `선택지 ${i + 1}` });
-  }
-
-  const statePatch =
-    out?.statePatch && typeof out.statePatch === "object" && !Array.isArray(out.statePatch)
-      ? out.statePatch
-      : {};
-
+function fallback(reason = "") {
   return {
-    story: story || "…(GM이 잠시 말이 없다. 다시 시도해줘.)",
-    choices,
-    statePatch,
+    story: reason
+      ? `⚠️ GM 오류: ${reason}`
+      : "GM이 상황을 정리 중이다. 잠시 후 다시 시도해줘.",
+    choices: [
+      { id: "retry1", text: "다시 시도한다" },
+      { id: "retry2", text: "다른 행동을 해본다" },
+      { id: "retry3", text: "잠시 기다린다" }
+    ],
+    statePatch: {}
   };
 }
 
 export default async function handler(req, res) {
-  setCors(req, res);
-
+  cors(res);
   if (req.method === "OPTIONS") return res.status(204).end();
-  if (req.method !== "POST") return res.status(405).json({ error: "Method Not Allowed" });
-
-  const apiKey = process.env.GEMINI_API_KEY;
-  if (!apiKey) return res.status(500).json({ error: "Missing GEMINI_API_KEY" });
 
   try {
-    const body = req.body ?? {};
+    const apiKey = process.env.GEMINI_API_KEY;
+    if (!apiKey) {
+      return res.status(200).json(fallback("GEMINI_API_KEY 없음"));
+    }
 
+    const body = req.body ?? {};
     const game = body.game ?? {};
     const state = body.state ?? {};
     const history = Array.isArray(body.history) ? body.history : [];
-    const userText = body.userText ?? null;
-    const choiceId = body.choiceId ?? null;
-    const lastChoices = Array.isArray(body.lastChoices) ? body.lastChoices : [];
+    const userText = body.userText ?? "";
 
-    const title = String(game.title ?? "게임").trim();
-    const genre = String(game.genre ?? "").trim();
-    const seed = String(game.seed ?? "").trim();
+    const prompt = `
+너는 모바일 TRPG의 GM이다.
+항상 한국어로 대답한다.
 
-    const historyText = history
-      .slice(-20)
-      .map((m) => {
-        const r = m.role === "me" ? "PLAYER" : m.role === "gm" ? "GM" : "SYSTEM";
-        const txt = String(m.text ?? "").trim();
-        return txt ? `${r}: ${txt}` : "";
-      })
-      .filter(Boolean)
-      .join("\n");
+[게임]
+제목: ${game.title || "게임"}
+장르: ${game.genre || "자유"}
 
-    // ✅ 시스템 룰(반복 방지 + JSON 강제)
-    const systemInstruction = [
-      "너는 모바일 TRPG의 GM이다.",
-      "항상 한국어로, 스토리 1~3문단을 출력한다.",
-      "반드시 JSON 객체만 응답한다(설명/코드펜스/추가 텍스트 금지).",
-      "선택지는 정확히 3개. 서로 다른 접근(관찰/대화/행동/위험감수/회피 등)으로 구분한다.",
-      "직전 턴 선택지와 동일/유사한 선택지를 반복하지 마라.",
-      "플레이어의 직전 입력에 직접 반응하는 선택지를 최소 1개 포함하라.",
-      "과도한 폭력/선정/혐오/불법행동의 구체 묘사는 피한다."
-    ].join(" ");
+[상태]
+${JSON.stringify(state)}
 
-    const userPrompt = [
-      `게임 제목: ${title}`,
-      genre ? `장르/톤: ${genre}` : "",
-      seed ? `초기 설정: ${seed}` : "",
-      "",
-      "현재 상태(state) JSON:",
-      JSON.stringify(state ?? {}, null, 2),
-      "",
-      "직전 GM 선택지(lastChoices):",
-      lastChoices.length ? JSON.stringify(lastChoices, null, 2) : "(없음)",
-      "",
-      "최근 대화(history):",
-      historyText || "(대화 없음)",
-      "",
-      "플레이어 입력:",
-      userText ? String(userText) : "(없음: GM이 장면을 시작)",
-      choiceId ? `선택지 ID: ${choiceId}` : "",
-      "",
-      "이제 다음 장면을 제시하라."
-    ].filter(Boolean).join("\n");
+[최근 대화]
+${history.map(h => `${h.role}: ${h.text}`).join("\n")}
+
+[플레이어 입력]
+${userText || "(없음)"}
+
+다음 장면을 진행하라.
+반드시 아래 JSON 형식으로만 응답하라.
+
+{
+  "story": "스토리 본문",
+  "choices": [
+    { "id": "1", "text": "선택지1" },
+    { "id": "2", "text": "선택지2" },
+    { "id": "3", "text": "선택지3" }
+  ],
+  "statePatch": {}
+}
+`;
 
     const ai = new GoogleGenAI({ apiKey });
     const model = process.env.GEMINI_MODEL || "gemini-2.0-flash";
 
-    // ✅ JSON 스키마 강제(‘말 없음’/파싱 실패 방지 핵심)
-    const response = await ai.models.generateContent({
+    const result = await ai.models.generateContent({
       model,
-      contents: [{ role: "user", parts: [{ text: userPrompt }] }],
-      config: {
-        systemInstruction,
-        temperature: 0.9,
-        responseMimeType: "application/json",
-        responseSchema: {
-          type: "object",
-          properties: {
-            story: { type: "string" },
-            choices: {
-              type: "array",
-              minItems: 3,
-              maxItems: 3,
-              items: {
-                type: "object",
-                properties: {
-                  id: { type: "string" },
-                  text: { type: "string" },
-                },
-                required: ["id", "text"],
-              },
-            },
-            statePatch: {
-              type: "object",
-              additionalProperties: true,
-            },
-          },
-          required: ["story", "choices", "statePatch"],
-        },
-      },
+      contents: [{ role: "user", parts: [{ text: prompt }] }]
     });
 
-    const raw = response?.text ?? "";
+    const raw = result?.text || "";
+    const start = raw.indexOf("{");
+    const end = raw.lastIndexOf("}");
 
-    // 디버그(필요하면 주석 해제)
-    // console.log("GEMINI RAW:", raw);
+    if (start === -1 || end === -1) {
+      return res.status(200).json(fallback("JSON 파싱 실패"));
+    }
 
-    const parsed = safeJsonParse(raw);
-    const out = normalizeOutput(parsed);
+    const parsed = JSON.parse(raw.slice(start, end + 1));
 
-    // ✅ 폴백이 반복되는지 감지하고 로그 남기기(옵션)
-    // if (out.story.includes("GM이 잠시 말이 없다")) console.warn("Empty/invalid JSON from model:", raw);
+    return res.status(200).json({
+      story: parsed.story || fallback().story,
+      choices: parsed.choices?.slice(0, 3) || fallback().choices,
+      statePatch: parsed.statePatch || {}
+    });
 
-    res.setHeader("Cache-Control", "no-store");
-    return res.status(200).json(out);
   } catch (err) {
-    // 500으로 보내서 프론트에서 원인을 볼 수 있게
-    return res.status(500).json({
-      error: "Server error",
-      message: String(err?.message || err),
-    });
+    // 🔥 절대 500 안 보냄
+    return res.status(200).json(fallback(err.message));
   }
 }
